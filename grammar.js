@@ -20,6 +20,8 @@ module.exports = grammar({
     $.entries_keyword
   ],
 
+  word: $ => $.identifier,
+
   extras: $ => [
     /\s/,
     $.antlers_comment
@@ -30,7 +32,8 @@ module.exports = grammar({
     [$.parameter_value, $.primary_expression],
     [$.expression_with_modifiers, $.primary_expression],
     [$._tag_content, $.expression_with_modifiers],
-    [$.parameter, $.binary_expression]
+    [$.parameter, $.binary_expression],
+    [$.variable, $.nested_variable]
     // Temporarily removed binary/unary conflicts to test automatic resolution
     // [$.binary_expression, $.unary_expression],
     // [$.ternary_expression, $.unary_expression]
@@ -106,9 +109,7 @@ module.exports = grammar({
 
     antlers_tag: $ => seq(
       '{{',
-      optional(/\s*/),
       $._tag_content,
-      optional(/\s*/),
       '}}'
     ),
 
@@ -146,7 +147,7 @@ module.exports = grammar({
       seq(':', $.parameter_name, '=', $.parameter_value)
     )),
 
-    parameter_name: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+    parameter_name: $ => alias($.identifier, $.parameter_name),
 
     parameter_value: $ => choice(
       $.string,
@@ -168,15 +169,15 @@ module.exports = grammar({
       $.array_access_variable
     ),
 
-    simple_variable: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+    simple_variable: $ => alias($.identifier, $.simple_variable),
 
-    nested_variable: $ => seq(
+    nested_variable: $ => prec.left(seq(
       $.simple_variable,
       repeat1(seq(
         choice(':', '.'),
         $.simple_variable
       ))
-    ),
+    )),
 
     array_access_variable: $ => seq(
       $.simple_variable,
@@ -352,14 +353,14 @@ module.exports = grammar({
       ')'
     )),
 
-    modifier_name: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+    modifier_name: $ => alias($.identifier, $.modifier_name),
 
     modifier_parameters: $ => choice(
       // Colon syntax: modifier:param  
       seq(
         token(prec(10, ':')),
         choice(
-          alias(/[a-zA-Z_][a-zA-Z0-9_]*/, $.variable),
+          alias($.identifier, $.variable),
           $.number
         )
       ),
@@ -434,251 +435,216 @@ module.exports = grammar({
     boolean: $ => choice('true', 'false'),
 
     if_statement: $ => prec.right(seq(
-      seq('{{', /\s*/, $.if_keyword, /\s+/, $.expression, /\s*/, '}}'),
-      repeat($._node),
-      repeat(prec.right(seq(
-        seq('{{', /\s*/, 'elseif', /\s+/, $.expression, /\s*/, '}}'),
-        repeat($._node)
-      ))),
-      optional(seq(
-        seq('{{', /\s*/, 'else', /\s*/, '}}'),
-        repeat($._node)
-      )),
-      seq('{{', /\s*/, '/if', /\s*/, '}}')
+      '{{', $.if_keyword, $.expression, '}}',
+      $._if_body
     )),
 
-    unless_statement: $ => seq(
-      seq('{{', /\s*/, $.unless_keyword, /\s+/, $.expression, /\s*/, '}}'),
+    _if_body: $ => prec.right(choice(
+      // End: {{ /if }}
+      seq(repeat($._node), '{{', '/if', '}}'),
+      // Elseif branch: {{ elseif expr }} ... (recurse)
+      seq(repeat($._node), '{{', 'elseif', $.expression, '}}', $._if_body),
+      // Else branch: {{ else }} ... {{ /if }}
+      seq(repeat($._node), '{{', 'else', '}}', repeat($._node), '{{', '/if', '}}')
+    )),
+
+    unless_statement: $ => prec.right(seq(
+      '{{', $.unless_keyword, $.expression, '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/unless', /\s*/, '}}')
-    ),
+      '{{', '/unless', '}}'
+    )),
 
     collection_loop: $ => choice(
-      // Collection with colon syntax: {{ collection:handle }}...{{ /collection:handle }}
       seq(
-        seq('{{', /\s*/, $.collection_keyword, ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
+        '{{', $.collection_keyword, ':', $.variable, optional($.tag_parameters), '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.collection_keyword, ':', $.variable, /\s*/, '}}')
+        '{{', '/', $.collection_keyword, ':', $.variable, '}}'
       ),
-      
-      // Collection with from parameter: {{ collection from="handle" }}...{{ /collection }}
       seq(
-        seq('{{', /\s*/, $.collection_keyword, /\s+/, $.tag_parameters, /\s*/, '}}'),
+        '{{', $.collection_keyword, $.tag_parameters, '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.collection_keyword, /\s*/, '}}')
+        '{{', '/', $.collection_keyword, '}}'
       )
     ),
 
     nav_loop: $ => choice(
-      // Nav with colon syntax: {{ nav:handle }}...{{ /nav:handle }}
       seq(
-        seq('{{', /\s*/, $.nav_keyword, ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
+        '{{', $.nav_keyword, ':', $.variable, optional($.tag_parameters), '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.nav_keyword, ':', $.variable, /\s*/, '}}')
+        '{{', '/', $.nav_keyword, ':', $.variable, '}}'
       ),
-      
-      // Nav with from parameter: {{ nav from="handle" }}...{{ /nav }}
       seq(
-        seq('{{', /\s*/, $.nav_keyword, /\s+/, $.tag_parameters, /\s*/, '}}'),
+        '{{', $.nav_keyword, $.tag_parameters, '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.nav_keyword, /\s*/, '}}')
+        '{{', '/', $.nav_keyword, '}}'
       ),
-      
-      // Breadcrumbs navigation: {{ nav:breadcrumbs }}...{{ /nav:breadcrumbs }}
       seq(
-        seq('{{', /\s*/, $.nav_keyword, ':', 'breadcrumbs', optional($.tag_parameters), /\s*/, '}}'),
+        '{{', $.nav_keyword, ':', 'breadcrumbs', optional($.tag_parameters), '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.nav_keyword, ':', 'breadcrumbs', /\s*/, '}}')
+        '{{', '/', $.nav_keyword, ':', 'breadcrumbs', '}}'
       )
     ),
 
     taxonomy_loop: $ => choice(
-      // Taxonomy with colon syntax: {{ taxonomy:handle }}...{{ /taxonomy:handle }}
       seq(
-        seq('{{', /\s*/, $.taxonomy_keyword, ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
+        '{{', $.taxonomy_keyword, ':', $.variable, optional($.tag_parameters), '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.taxonomy_keyword, ':', $.variable, /\s*/, '}}')
+        '{{', '/', $.taxonomy_keyword, ':', $.variable, '}}'
       ),
-      
-      // Taxonomy with from parameter: {{ taxonomy from="handle" }}...{{ /taxonomy }}
       seq(
-        seq('{{', /\s*/, $.taxonomy_keyword, /\s+/, $.tag_parameters, /\s*/, '}}'),
+        '{{', $.taxonomy_keyword, $.tag_parameters, '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.taxonomy_keyword, /\s*/, '}}')
+        '{{', '/', $.taxonomy_keyword, '}}'
       )
     ),
 
     form_loop: $ => choice(
-      // Form with colon syntax: {{ form:handle }}...{{ /form:handle }}
       seq(
-        seq('{{', /\s*/, $.form_keyword, ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
+        '{{', $.form_keyword, ':', $.variable, optional($.tag_parameters), '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.form_keyword, ':', $.variable, /\s*/, '}}')
+        '{{', '/', $.form_keyword, ':', $.variable, '}}'
       ),
-      
-      // Form with from parameter: {{ form from="handle" }}...{{ /form }}
       seq(
-        seq('{{', /\s*/, $.form_keyword, /\s+/, $.tag_parameters, /\s*/, '}}'),
+        '{{', $.form_keyword, $.tag_parameters, '}}',
         repeat($._node),
-        seq('{{', /\s*/, '/', $.form_keyword, /\s*/, '}}')
+        '{{', '/', $.form_keyword, '}}'
       )
     ),
 
     recursive_pattern: $ => choice(
-      // Basic recursive: {{ *recursive children* }}
-      seq('{{', /\s*/, '*recursive', /\s+/, 'children', '*', /\s*/, '}}'),
-      
-      // Recursive with scoped variable: {{ *recursive children:variable* }}
-      seq('{{', /\s*/, '*recursive', /\s+/, 'children', ':', $.variable, '*', /\s*/, '}}')
+      seq('{{', '*recursive', 'children', '*', '}}'),
+      seq('{{', '*recursive', 'children', ':', $.variable, '*', '}}')
     ),
 
     form_errors: $ => seq(
-      seq('{{', /\s*/, 'form', ':', 'errors', optional($.tag_parameters), /\s*/, '}}'),
+      '{{', 'form', ':', 'errors', optional($.tag_parameters), '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'form', ':', 'errors', /\s*/, '}}')
+      '{{', '/', 'form', ':', 'errors', '}}'
     ),
 
     entries_loop: $ => seq(
-      seq('{{', /\s*/, $.entries_keyword, optional($.tag_parameters), /\s*/, '}}'),
+      '{{', $.entries_keyword, optional($.tag_parameters), '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', $.entries_keyword, /\s*/, '}}')
+      '{{', '/', $.entries_keyword, '}}'
     ),
 
-    // Special tags
     partial_tag: $ => choice(
-      // Partial include: {{ partial:src="template" }}
-      seq('{{', /\s*/, 'partial', ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
-      // Partial with parameters: {{ partial src="template" }}
-      seq('{{', /\s*/, 'partial', $.tag_parameters, /\s*/, '}}')
+      seq('{{', 'partial', ':', $.variable, optional($.tag_parameters), '}}'),
+      seq('{{', 'partial', $.tag_parameters, '}}')
     ),
 
     yield_tag: $ => choice(
-      // Named yield: {{ yield:content }}
-      seq('{{', /\s*/, 'yield', ':', $.variable, /\s*/, '}}'),
-      // Basic yield: {{ yield }}
-      seq('{{', /\s*/, 'yield', /\s*/, '}}')
+      seq('{{', 'yield', ':', $.variable, '}}'),
+      seq('{{', 'yield', '}}')
     ),
 
     section_tag: $ => seq(
-      seq('{{', /\s*/, 'section', ':', $.variable, /\s*/, '}}'),
+      '{{', 'section', ':', $.variable, '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'section', ':', $.variable, /\s*/, '}}')
+      '{{', '/', 'section', ':', $.variable, '}}'
     ),
 
     scope_tag: $ => seq(
-      seq('{{', /\s*/, 'scope', optional($.tag_parameters), /\s*/, '}}'),
+      '{{', 'scope', optional($.tag_parameters), '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'scope', /\s*/, '}}')
+      '{{', '/', 'scope', '}}'
     ),
 
     asset_tag: $ => choice(
-      // Asset with colon syntax: {{ asset:handle }}
-      seq('{{', /\s*/, 'asset', ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
-      // Asset with parameters: {{ asset src="image.jpg" }}
-      seq('{{', /\s*/, 'asset', $.tag_parameters, /\s*/, '}}')
+      seq('{{', 'asset', ':', $.variable, optional($.tag_parameters), '}}'),
+      seq('{{', 'asset', $.tag_parameters, '}}')
     ),
 
     glide_tag: $ => choice(
-      // Glide with colon syntax: {{ glide:src }}
-      seq('{{', /\s*/, 'glide', ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
-      // Glide with parameters: {{ glide src="image.jpg" width="300" }}
-      seq('{{', /\s*/, 'glide', $.tag_parameters, /\s*/, '}}')
+      seq('{{', 'glide', ':', $.variable, optional($.tag_parameters), '}}'),
+      seq('{{', 'glide', $.tag_parameters, '}}')
     ),
 
     dump_tag: $ => choice(
-      // Dump variable: {{ dump:variable }}
-      seq('{{', /\s*/, 'dump', ':', $.variable, /\s*/, '}}'),
-      // Dump everything: {{ dump }}
-      seq('{{', /\s*/, 'dump', /\s*/, '}}')
+      seq('{{', 'dump', ':', $.variable, '}}'),
+      seq('{{', 'dump', '}}')
     ),
 
     switch_statement: $ => seq(
-      '{{', /\s*/, 'switch', '(',
+      '{{', 'switch', '(',
       optional(seq(
         $.switch_case,
-        repeat(seq(',', optional(/\s*/), $.switch_case))
+        repeat(seq(',', $.switch_case))
       )),
-      ')', /\s*/, '}}'
+      ')', '}}'
     ),
 
     switch_case: $ => seq(
-      '(',
-      $.expression,
-      ')',
+      '(', $.expression, ')',
       '=>',
       choice($.string, $.number, $.boolean, $.variable)
     ),
 
     user_tag: $ => choice(
-      // User permission: {{ user:can "permission" }}
-      seq('{{', /\s*/, 'user', ':', 'can', /\s+/, $.string, /\s*/, '}}'),
-      // User is: {{ user:is "role" }}
-      seq('{{', /\s*/, 'user', ':', 'is', /\s+/, $.string, /\s*/, '}}'),
-      // User in: {{ user:in "group" }}
-      seq('{{', /\s*/, 'user', ':', 'in', /\s+/, $.string, /\s*/, '}}'),
-      // User with parameters: {{ user:can permission="edit" }}
-      seq('{{', /\s*/, 'user', ':', choice('can', 'is', 'in'), $.tag_parameters, /\s*/, '}}')
+      seq('{{', 'user', ':', 'can', $.string, '}}'),
+      seq('{{', 'user', ':', 'is', $.string, '}}'),
+      seq('{{', 'user', ':', 'in', $.string, '}}'),
+      seq('{{', 'user', ':', choice('can', 'is', 'in'), $.tag_parameters, '}}')
     ),
 
-    // Additional specialized tags
     cache_tag: $ => seq(
-      seq('{{', /\s*/, 'cache', optional($.tag_parameters), /\s*/, '}}'),
+      '{{', 'cache', optional($.tag_parameters), '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'cache', /\s*/, '}}')
+      '{{', '/', 'cache', '}}'
     ),
 
     no_cache_tag: $ => seq(
-      seq('{{', /\s*/, 'no_cache', /\s*/, '}}'),
+      '{{', 'no_cache', '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'no_cache', /\s*/, '}}')
+      '{{', '/', 'no_cache', '}}'
     ),
 
-    redirect_tag: $ => seq('{{', /\s*/, 'redirect', $.tag_parameters, /\s*/, '}}'),
+    redirect_tag: $ => seq('{{', 'redirect', $.tag_parameters, '}}'),
 
     session_tag: $ => choice(
-      seq('{{', /\s*/, 'session', ':', $.variable, /\s*/, '}}'),
-      seq('{{', /\s*/, 'session', $.tag_parameters, /\s*/, '}}')
+      seq('{{', 'session', ':', $.variable, '}}'),
+      seq('{{', 'session', $.tag_parameters, '}}')
     ),
 
     markdown_tag: $ => seq(
-      seq('{{', /\s*/, 'markdown', /\s*/, '}}'),
+      '{{', 'markdown', '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'markdown', /\s*/, '}}')
+      '{{', '/', 'markdown', '}}'
     ),
 
-    oauth_tag: $ => seq('{{', /\s*/, 'oauth', ':', $.variable, optional($.tag_parameters), /\s*/, '}}'),
+    oauth_tag: $ => seq('{{', 'oauth', ':', $.variable, optional($.tag_parameters), '}}'),
 
     locales_tag: $ => choice(
-      seq('{{', /\s*/, 'locales', /\s*/, '}}'),
-      seq('{{', /\s*/, 'locales', $.tag_parameters, /\s*/, '}}')
+      seq('{{', 'locales', '}}'),
+      seq('{{', 'locales', $.tag_parameters, '}}')
     ),
 
-    svg_tag: $ => seq('{{', /\s*/, 'svg', $.tag_parameters, /\s*/, '}}'),
+    svg_tag: $ => seq('{{', 'svg', $.tag_parameters, '}}'),
 
-    template_content_tag: $ => seq('{{', /\s*/, 'template_content', /\s*/, '}}'),
+    template_content_tag: $ => seq('{{', 'template_content', '}}'),
 
     slot_tag: $ => seq(
-      seq('{{', /\s*/, 'slot', ':', $.variable, /\s*/, '}}'),
+      '{{', 'slot', ':', $.variable, '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'slot', ':', $.variable, /\s*/, '}}')
+      '{{', '/', 'slot', ':', $.variable, '}}'
     ),
 
     push_tag: $ => seq(
-      seq('{{', /\s*/, 'push', ':', $.variable, /\s*/, '}}'),
+      '{{', 'push', ':', $.variable, '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'push', ':', $.variable, /\s*/, '}}')
+      '{{', '/', 'push', ':', $.variable, '}}'
     ),
 
     prepend_tag: $ => seq(
-      seq('{{', /\s*/, 'prepend', ':', $.variable, /\s*/, '}}'),
+      '{{', 'prepend', ':', $.variable, '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'prepend', ':', $.variable, /\s*/, '}}')
+      '{{', '/', 'prepend', ':', $.variable, '}}'
     ),
 
     once_tag: $ => seq(
-      seq('{{', /\s*/, 'once', /\s*/, '}}'),
+      '{{', 'once', '}}',
       repeat($._node),
-      seq('{{', /\s*/, '/', 'once', /\s*/, '}}')
+      '{{', '/', 'once', '}}'
     ),
 
     ignore_symbol: $ => token(seq('@', /[^{]*/)),
